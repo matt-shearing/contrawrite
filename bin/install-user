@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+BIN_DIR="${HOME}/bin"
+DESKTOP_DIR="${HOME}/.local/share/applications"
+
+"$ROOT/bin/build"
+
+mkdir -p "$BIN_DIR" "$DESKTOP_DIR"
+install -Dm755 "$ROOT/build/omawrite" "$BIN_DIR/omawrite"
+install -Dm644 "$ROOT/pkgbuild/omawrite.svg" \
+  "${HOME}/.local/share/icons/hicolor/scalable/apps/omawrite.svg"
+
+cat > "$DESKTOP_DIR/omawrite.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Omawrite
+GenericName=Markdown Writer
+Comment=Dead-simple Markdown writing app
+Exec=${BIN_DIR}/omawrite %f
+Icon=omawrite
+Terminal=false
+Categories=Office;WordProcessor;TextEditor;
+MimeType=text/markdown;text/x-markdown;text/plain;
+Keywords=markdown;write;notes;text;editor;
+StartupWMClass=omawrite
+EOF
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q "$DESKTOP_DIR" || true
+fi
+
+echo "Installed $BIN_DIR/omawrite"
+echo "Launcher: $DESKTOP_DIR/omawrite.desktop"

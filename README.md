@@ -21,8 +21,14 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Super+F` toggles fullscreen. Qt maps this key as `Meta+F`.
 - `Ctrl+F` searches the document. Use `Enter` or `Ctrl+G` for the next match and `Shift+Enter` for the previous match.
 - `Ctrl+H` opens find and replace.
+- `Ctrl+Shift+H` opens checkpoints.
 - `Ctrl+B`, `Ctrl+I`, and `Ctrl+K` insert bold, italic, and link Markdown.
 - `Ctrl+?` shows the keyboard shortcut reference.
+
+Named files autosave every 30 seconds while they have unsaved edits. Each autosave
+and manual save keeps a local checkpoint; the clock icon in the footer (or
+`Ctrl+Shift+H`) reverts to any of them. Untitled windows are checkpointed the same
+way until the first Save As.
 
 Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
 and warns before an external change can replace local work.

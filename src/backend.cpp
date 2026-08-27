@@ -3,6 +3,10 @@
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDate>
+#include <QDateTime>
+#include <QtGlobal>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -34,6 +38,8 @@
 #include "markdownhighlighter.h"
 
 constexpr qreal typoraLineHeightPercent = 140;
+constexpr int defaultAutosaveIntervalMs = 30000;
+constexpr int maxCheckpointsPerDocument = 200;
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
@@ -97,6 +103,9 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     m_recoveryTimer.setSingleShot(true);
     m_recoveryTimer.setInterval(750);
     connect(&m_recoveryTimer, &QTimer::timeout, this, &Backend::writeRecovery);
+    m_autosaveTimer.setSingleShot(true);
+    m_autosaveTimer.setInterval(defaultAutosaveIntervalMs);
+    connect(&m_autosaveTimer, &QTimer::timeout, this, &Backend::autosaveNow);
     connect(&m_fileWatcher, &QFileSystemWatcher::fileChanged, this,
             [this](const QString &path) {
                 if (path != m_fileUrl.toLocalFile())
@@ -192,6 +201,7 @@ void Backend::attachDocument(QObject *textDocument) {
 
     applyDocumentTypography();
     restoreRecovery();
+    adoptHistory();
 }
 
 void Backend::openDialog() {
@@ -220,6 +230,7 @@ void Backend::open(const QUrl &url) {
     watchCurrentFile();
     setModified(false);
     setStatus(QStringLiteral("Opened %1").arg(fileName()));
+    adoptHistory();
 }
 
 void Backend::save() {
@@ -358,6 +369,7 @@ bool Backend::editorTextChanged() {
     setModified(true);
     setStatus(QStringLiteral("Unsaved"));
     scheduleRecovery();
+    scheduleAutosave();
     return true;
 }
 
@@ -452,6 +464,8 @@ void Backend::setModified(bool modified) {
         return;
 
     m_modified = modified;
+    if (!m_modified)
+        m_autosaveTimer.stop();
     emit modifiedChanged();
 }
 
@@ -470,14 +484,17 @@ void Backend::saveTo(const QUrl &url) {
         return;
     }
 
+    const QString previousKey = historyKey();
     const QString targetName = QFileInfo(url.toLocalFile()).fileName();
     QSaveFile file(url.toLocalFile());
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         m_closeAfterSave = false;
         setStatus(QStringLiteral("Could not save %1.").arg(targetName));
+        scheduleAutosave();
         return;
     }
 
+    writeCheckpointIfChanged();
     const QByteArray contents = currentDocumentText().toUtf8();
     file.write(contents);
 
@@ -493,6 +510,7 @@ void Backend::saveTo(const QUrl &url) {
         watchCurrentFile();
         m_closeAfterSave = false;
         setStatus(QStringLiteral("Could not write %1.").arg(targetName));
+        scheduleAutosave();
         return;
     }
 
@@ -501,6 +519,7 @@ void Backend::saveTo(const QUrl &url) {
     m_lastKnownFileContents = contents;
     m_hasKnownFileContents = true;
     setFileUrl(url);
+    migrateHistory(previousKey, historyKey());
     watchCurrentFile();
     QSettings().setValue(lastSaveDirectorySetting,
                          QFileInfo(url.toLocalFile()).absolutePath());
@@ -515,6 +534,200 @@ void Backend::saveTo(const QUrl &url) {
 
 void Backend::scheduleRecovery() {
     m_recoveryTimer.start();
+}
+
+void Backend::scheduleAutosave() {
+    if (m_modified && !m_autosaveTimer.isActive())
+        m_autosaveTimer.start();
+}
+
+int Backend::autosaveInterval() const {
+    return m_autosaveTimer.interval();
+}
+
+void Backend::setAutosaveInterval(int msec) {
+    m_autosaveTimer.setInterval(qMax(1, msec));
+}
+
+void Backend::autosaveNow() {
+    if (!m_modified)
+        return;
+
+    if (m_fileUrl.isLocalFile()) {
+        saveTo(m_fileUrl);
+        if (!m_modified)
+            setStatus(QStringLiteral("Autosaved %1").arg(fileName()));
+        return;
+    }
+
+    writeCheckpointIfChanged();
+    setStatus(QStringLiteral("Checkpointed"));
+}
+
+QString Backend::historyRoot() const {
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+        .filePath(QStringLiteral("history"));
+}
+
+QString Backend::historyKey() const {
+    if (m_fileUrl.isLocalFile()) {
+        const QByteArray hash = QCryptographicHash::hash(
+            QFileInfo(m_fileUrl.toLocalFile()).absoluteFilePath().toUtf8(),
+            QCryptographicHash::Sha1);
+        return QString::fromLatin1(hash.toHex());
+    }
+
+    const QString base = QFileInfo(m_recoveryPath).completeBaseName();
+    return base.isEmpty() ? QStringLiteral("untitled") : base;
+}
+
+QString Backend::historyDirectory() const {
+    return QDir(historyRoot()).filePath(historyKey());
+}
+
+QString Backend::checkpointPreview(const QString &text) {
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    for (QString line : lines) {
+        line = line.trimmed();
+        if (!line.isEmpty())
+            return line.left(72);
+    }
+    return QStringLiteral("Empty");
+}
+
+QString Backend::formatCheckpointWhen(const QDateTime &when) {
+    const QDate today = QDate::currentDate();
+    if (when.date() == today)
+        return when.toString(QStringLiteral("HH:mm:ss"));
+    if (when.date() == today.addDays(-1))
+        return QStringLiteral("Yesterday ") + when.toString(QStringLiteral("HH:mm"));
+    return when.toString(QStringLiteral("MMM d HH:mm"));
+}
+
+void Backend::writeCheckpointIfChanged() {
+    const QString text = currentDocumentText();
+    if (text.trimmed().isEmpty() || text == m_lastCheckpointText)
+        return;
+
+    const QString directory = historyDirectory();
+    QDir().mkpath(directory);
+
+    QString name = QDateTime::currentDateTime().toString(
+        QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    QString path = QDir(directory).filePath(name + QStringLiteral(".md"));
+    for (int suffix = 1; QFileInfo::exists(path); ++suffix) {
+        path = QDir(directory).filePath(
+            name + QLatin1Char('-') + QString::number(suffix) + QStringLiteral(".md"));
+    }
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+        return;
+    file.write(text.toUtf8());
+    if (!file.commit())
+        return;
+
+    m_lastCheckpointText = text;
+    pruneHistory(directory);
+    refreshCheckpoints();
+}
+
+void Backend::adoptHistory() {
+    const QString text = currentDocumentText();
+    const QDir directory(historyDirectory());
+    const bool hasHistory = directory.exists()
+        && !directory.entryList({QStringLiteral("*.md")}, QDir::Files).isEmpty();
+    if (hasHistory) {
+        m_lastCheckpointText = text;
+        refreshCheckpoints();
+        return;
+    }
+
+    m_lastCheckpointText.clear();
+    writeCheckpointIfChanged();
+}
+
+void Backend::migrateHistory(const QString &fromKey, const QString &toKey) {
+    if (fromKey == toKey || fromKey.isEmpty() || toKey.isEmpty())
+        return;
+
+    const QString fromPath = QDir(historyRoot()).filePath(fromKey);
+    QDir fromDirectory(fromPath);
+    if (!fromDirectory.exists())
+        return;
+
+    const QString toPath = QDir(historyRoot()).filePath(toKey);
+    QDir().mkpath(toPath);
+    const auto files = fromDirectory.entryInfoList({QStringLiteral("*.md")}, QDir::Files);
+    for (const QFileInfo &info : files) {
+        const QString destination = QDir(toPath).filePath(info.fileName());
+        if (!QFileInfo::exists(destination))
+            QFile::copy(info.absoluteFilePath(), destination);
+    }
+    fromDirectory.removeRecursively();
+    pruneHistory(toPath);
+    refreshCheckpoints();
+}
+
+void Backend::pruneHistory(const QString &directory) const {
+    QDir dir(directory);
+    const auto files = dir.entryInfoList({QStringLiteral("*.md")}, QDir::Files,
+                                         QDir::Name | QDir::Reversed);
+    for (int i = maxCheckpointsPerDocument; i < files.size(); ++i)
+        QFile::remove(files.at(i).absoluteFilePath());
+}
+
+void Backend::refreshCheckpoints() {
+    QVariantList checkpoints;
+    const QDir directory(historyDirectory());
+    const auto files = directory.entryInfoList({QStringLiteral("*.md")}, QDir::Files,
+                                               QDir::Name | QDir::Reversed);
+    for (const QFileInfo &info : files) {
+        QFile file(info.absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            continue;
+        const QString text = QString::fromUtf8(file.readAll());
+        QDateTime when = QDateTime::fromString(info.completeBaseName().left(19),
+                                               QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+        if (!when.isValid())
+            when = info.lastModified();
+        checkpoints.append(QVariantMap{
+            {QStringLiteral("id"), info.fileName()},
+            {QStringLiteral("when"), formatCheckpointWhen(when)},
+            {QStringLiteral("preview"), checkpointPreview(text)},
+        });
+    }
+
+    if (checkpoints == m_checkpoints)
+        return;
+    m_checkpoints = checkpoints;
+    emit checkpointsChanged();
+}
+
+void Backend::restoreCheckpoint(const QString &id) {
+    if (id.isEmpty() || id.contains(QLatin1Char('/')) || id.contains(QLatin1Char('\\')))
+        return;
+
+    const QString path = QDir(historyDirectory()).filePath(id);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setStatus(QStringLiteral("Could not restore checkpoint."));
+        return;
+    }
+
+    const QString text = QString::fromUtf8(file.readAll());
+    if (text == currentDocumentText()) {
+        setStatus(QStringLiteral("Already at this checkpoint"));
+        return;
+    }
+
+    writeCheckpointIfChanged();
+    loadDocumentText(text);
+    setModified(true);
+    setStatus(QStringLiteral("Restored %1").arg(
+        formatCheckpointWhen(QFileInfo(path).lastModified())));
+    scheduleRecovery();
+    scheduleAutosave();
 }
 
 QString Backend::recoveryPath() const {
@@ -558,6 +771,7 @@ void Backend::restoreRecovery() {
     setFileUrl(recoveredUrl);
     setModified(true);
     setStatus(QStringLiteral("Recovered unsaved changes"));
+    scheduleAutosave();
 }
 
 void Backend::clearRecovery() {

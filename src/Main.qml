@@ -155,6 +155,12 @@ ApplicationWindow {
     }
 
     Shortcut {
+        sequence: "Ctrl+Shift+H"
+        context: Qt.ApplicationShortcut
+        onActivated: historyPopup.open()
+    }
+
+    Shortcut {
         sequence: "Ctrl+B"
         context: Qt.WindowShortcut
         onActivated: editor.wrapSelection("**", "**")
@@ -331,7 +337,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         anchors.centerIn: parent
         contentItem: Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
+            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+Shift+H  Checkpoints\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
             lineHeight: 1.5
         }
     }
@@ -821,6 +827,15 @@ ApplicationWindow {
                 onClicked: backend.openDialog()
             }
 
+            FooterIconButton {
+                id: historyButton
+                objectName: "historyButton"
+                iconName: "history"
+                iconColor: win.mutedColor
+                tooltip: "Checkpoints"
+                onClicked: historyPopup.open()
+            }
+
             Label {
                 text: backend.status
                 color: win.mutedColor
@@ -844,6 +859,20 @@ ApplicationWindow {
             opacity: 0.75
             font.family: "iA Writer Mono S"
             font.pixelSize: win.scaledSize(11)
+        }
+
+        HistoryPopup {
+            id: historyPopup
+            objectName: "historyPopup"
+            parent: Overlay.overlay
+            anchorItem: historyButton
+            darkMode: win.darkMode
+            textScale: win.textScale
+            textColor: win.textColor
+            strongTextColor: win.strongTextColor
+            mutedColor: win.mutedColor
+            checkpoints: backend.checkpoints
+            onRestoreRequested: function(id) { backend.restoreCheckpoint(id) }
         }
 
 

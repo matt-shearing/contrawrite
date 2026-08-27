@@ -1,9 +1,11 @@
 #include <QtTest>
+#include <QFile>
 #include <QFont>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <QStandardPaths>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -14,6 +16,7 @@ class OmawriteTest : public QObject {
 private slots:
     void initTestCase() {
         QVERIFY(m_settingsDirectory.isValid());
+        QStandardPaths::setTestModeEnabled(true);
         QQuickStyle::setStyle(QStringLiteral("Material"));
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
@@ -180,8 +183,10 @@ private slots:
 
         QObject *saveButton = window->findChild<QObject *>(QStringLiteral("saveButton"));
         QObject *openButton = window->findChild<QObject *>(QStringLiteral("openButton"));
+        QObject *historyButton = window->findChild<QObject *>(QStringLiteral("historyButton"));
         QVERIFY(saveButton);
         QVERIFY(openButton);
+        QVERIFY(historyButton);
 
         QSignalSpy saveDialogSpy(&backend, &Backend::saveDialogRequested);
         QVERIFY(QMetaObject::invokeMethod(saveButton, "clicked"));
@@ -244,6 +249,108 @@ private slots:
         fallbackDocument.saveAsDialog();
         const QUrl fallbackUrl = fallbackDialogSpy.takeFirst().constFirst().toUrl();
         QCOMPARE(QFileInfo(fallbackUrl.toLocalFile()).absolutePath(), QDir::homePath());
+    }
+
+    void autosavesNamedFileAndRestoresCheckpoint() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        editor->setProperty("text", QStringLiteral("first draft"));
+        const QString path = directory.filePath(QStringLiteral("note.md"));
+        backend.saveAs(QUrl::fromLocalFile(path));
+        QVERIFY(QFileInfo::exists(path));
+        QCOMPARE(backend.modified(), false);
+
+        editor->setProperty("text", QStringLiteral("second draft"));
+        QVERIFY(backend.modified());
+        backend.autosaveNow();
+        QCOMPARE(backend.modified(), false);
+
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly | QIODevice::Text));
+        QCOMPARE(QString::fromUtf8(saved.readAll()), QStringLiteral("second draft"));
+
+        QVERIFY(backend.checkpoints().size() >= 2);
+        const QString oldestId = backend.checkpoints().constLast().toMap()
+                                     .value(QStringLiteral("id"))
+                                     .toString();
+        backend.restoreCheckpoint(oldestId);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("first draft"));
+        QVERIFY(backend.modified());
+    }
+
+    void checkpointsUntitledWithoutWritingAFile() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("untitled thoughts"));
+        QVERIFY(backend.modified());
+        QVERIFY(backend.fileUrl().isEmpty());
+
+        backend.autosaveNow();
+        QVERIFY(backend.fileUrl().isEmpty());
+        QVERIFY(backend.modified());
+        QCOMPARE(backend.status(), QStringLiteral("Checkpointed"));
+        QVERIFY(backend.checkpoints().size() >= 1);
+        QCOMPARE(backend.checkpoints().constFirst().toMap().value(QStringLiteral("preview")),
+                 QStringLiteral("untitled thoughts"));
+    }
+
+    void autosavesNamedFileAfterInterval() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        Backend backend;
+        backend.setAutosaveInterval(80);
+        QCOMPARE(backend.autosaveInterval(), 80);
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("before"));
+        const QString path = directory.filePath(QStringLiteral("timed.md"));
+        backend.saveAs(QUrl::fromLocalFile(path));
+
+        editor->setProperty("text", QStringLiteral("after interval"));
+        QVERIFY(backend.modified());
+        QTRY_COMPARE(backend.modified(), false);
+
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly | QIODevice::Text));
+        QCOMPARE(QString::fromUtf8(saved.readAll()), QStringLiteral("after interval"));
     }
 
 private:
