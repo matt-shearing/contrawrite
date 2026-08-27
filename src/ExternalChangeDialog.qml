@@ -47,10 +47,10 @@ Dialog {
         Label {
             width: parent.width
             text: root.deleted
-                ? "This file was removed outside Omawrite. Keep your text as an unsaved document?"
+                ? "This file was removed outside Contrawrite. Keep your text as an unsaved document?"
                 : (root.locallyModified
-                   ? "This file changed outside Omawrite. Reloading will discard your changes."
-                   : "This file changed outside Omawrite.")
+                   ? "This file changed outside Contrawrite. Reloading will discard your changes."
+                   : "This file changed outside Contrawrite.")
             color: root.textColor
             wrapMode: Text.Wrap
             font.family: "iA Writer Mono S"

@@ -1,0 +1,21 @@
+#!/bin/bash
+# Interactive Grok Build session that rebases Contrawrite onto Omawrite.
+set -euo pipefail
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+export PATH="/usr/share/omarchy/bin:$HOME/.local/share/mise/shims:/usr/bin:/bin:$HOME/bin:$PATH"
+
+GROK="${GROK_BIN:-$HOME/.local/share/mise/shims/grok}"
+PROMPT="$ROOT/hooks/sync-prompt.md"
+
+if [[ ! -x $GROK ]]; then
+  echo "grok not found at $GROK" >&2
+  exit 1
+fi
+if [[ ! -f $PROMPT ]]; then
+  echo "missing $PROMPT" >&2
+  exit 1
+fi
+
+cd "$ROOT"
+exec "$GROK" --cwd "$ROOT" --always-approve --verbatim "$(cat "$PROMPT")"

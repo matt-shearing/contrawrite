@@ -1,14 +1,13 @@
-# Omawrite
+# Contrawrite
 
-A dead-simple Markdown writing app built with Qt Quick and C++ that automatically follows system dark/light mode.
+A personal fork of [Omawrite](https://github.com/omacom-io/omawrite): the same
+dead-simple Markdown writer, with 30-second autosave and local checkpoints.
 
-<img width="2948" height="3227" alt="screenshot-2026-06-23_15-24-08" src="https://github.com/user-attachments/assets/4e930c0d-edda-4046-b444-a59eff523329" />
-<img width="2948" height="3227" alt="screenshot-2026-06-23_15-23-23" src="https://github.com/user-attachments/assets/8ced7c26-961b-4ded-b263-84403001a951" />
+On this machine Super+Shift+W launches Contrawrite. Stock Omawrite stays
+installed as its own app.
 
-
-## Install
-
-Install via the Omarchy Package Repository via the `omawrite` package. It's installed by default in new installations of Omarchy (from Quattro forward).
+How the fork tracks upstream, where files live, and what the post-update hook
+does: **[CONTRWRITE.md](CONTRWRITE.md)**.
 
 ## Shortcuts
 
@@ -16,7 +15,7 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Ctrl+Shift+S` saves as.
 - `Ctrl+O` opens a Markdown file through the portal picker.
 - `Ctrl+P` opens the system print dialog.
-- `Ctrl+N` opens a new Omawrite window.
+- `Ctrl+N` opens a new Contrawrite window.
 - `Ctrl+Z`, `Ctrl+Shift+Z`, and `Ctrl+Y` handle undo and redo.
 - `Super+F` toggles fullscreen. Qt maps this key as `Meta+F`.
 - `Ctrl+F` searches the document. Use `Enter` or `Ctrl+G` for the next match and `Shift+Enter` for the previous match.
@@ -30,12 +29,12 @@ and manual save keeps a local checkpoint; the clock icon in the footer (or
 `Ctrl+Shift+H`) reverts to any of them. Untitled windows are checkpointed the same
 way until the first Save As.
 
-Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
+Unsaved drafts are recovered after an abnormal exit. Contrawrite also watches open files
 and warns before an external change can replace local work.
 
 Text follows the desktop text size — `omarchy display text size`, or GNOME's
 `text-scaling-factor` — and re-flows without a restart. The default of 12px leaves
-Omawrite at the size it is designed around; larger and smaller sizes scale from there.
+the editor at the size Omawrite is designed around; larger and smaller sizes scale from there.
 
 ## Requirements
 

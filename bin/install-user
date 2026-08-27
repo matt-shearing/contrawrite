@@ -4,26 +4,30 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BIN_DIR="${HOME}/bin"
 DESKTOP_DIR="${HOME}/.local/share/applications"
+ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
+HOOK_SRC="$ROOT/hooks/post-update-contrawrite.sh"
 
 "$ROOT/bin/build"
 
-mkdir -p "$BIN_DIR" "$DESKTOP_DIR"
-install -Dm755 "$ROOT/build/omawrite" "$BIN_DIR/omawrite"
-install -Dm644 "$ROOT/pkgbuild/omawrite.svg" \
-  "${HOME}/.local/share/icons/hicolor/scalable/apps/omawrite.svg"
+mkdir -p "$BIN_DIR" "$DESKTOP_DIR" "$ICON_DIR"
+install -Dm755 "$ROOT/build/omawrite" "$BIN_DIR/contrawrite"
+install -Dm644 "$ROOT/pkgbuild/omawrite.svg" "$ICON_DIR/contrawrite.svg"
 
-cat > "$DESKTOP_DIR/omawrite.desktop" <<EOF
+# Drop the earlier overlay that hid stock Omawrite in the launcher.
+rm -f "$DESKTOP_DIR/omawrite.desktop" "$BIN_DIR/omawrite"
+
+cat > "$DESKTOP_DIR/contrawrite.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Omawrite
+Name=Contrawrite
 GenericName=Markdown Writer
-Comment=Dead-simple Markdown writing app
-Exec=${BIN_DIR}/omawrite %f
-Icon=omawrite
+Comment=Omawrite with 30-second autosave and local checkpoints
+Exec=${BIN_DIR}/contrawrite %f
+Icon=contrawrite
 Terminal=false
 Categories=Office;WordProcessor;TextEditor;
 MimeType=text/markdown;text/x-markdown;text/plain;
-Keywords=markdown;write;notes;text;editor;
+Keywords=markdown;write;notes;text;editor;omawrite;
 StartupWMClass=omawrite
 EOF
 
@@ -31,5 +35,13 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q "$DESKTOP_DIR" || true
 fi
 
-echo "Installed $BIN_DIR/omawrite"
-echo "Launcher: $DESKTOP_DIR/omawrite.desktop"
+HOOK_INSTALL=/usr/share/omarchy/bin/omarchy-hook-install
+if [ -x "$HOOK_INSTALL" ]; then
+  "$HOOK_INSTALL" post-update "$HOOK_SRC" >/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q -t -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
+
+echo "Installed $BIN_DIR/contrawrite"
+echo "Launcher: $DESKTOP_DIR/contrawrite.desktop"

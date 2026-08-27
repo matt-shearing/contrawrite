@@ -1,0 +1,164 @@
+#!/bin/bash
+# Merge omacom-io/omawrite into Contrawrite, rebuild, and install.
+# Safe to run from an Omarchy post-update hook: no-ops when nothing moved.
+
+set -euo pipefail
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/contrawrite"
+LOCK="$STATE/sync.lock"
+FROM_HOOK=0
+WITH_GROK=0
+STATUS_ONLY=0
+
+export PATH="/usr/share/omarchy/bin:$HOME/.local/share/mise/shims:/usr/bin:/bin:$HOME/bin:$PATH"
+export GIT_TERMINAL_PROMPT=0
+
+NOTIFY=/usr/share/omarchy/bin/omarchy-notification-send
+LAUNCH=/usr/share/omarchy/bin/omarchy-launch-floating-terminal-with-presentation
+GROK="${GROK_BIN:-$HOME/.local/share/mise/shims/grok}"
+GIT=/usr/bin/git
+
+usage() {
+  echo "Usage: $0 [--from-hook] [--with-grok] [--status]" >&2
+  exit 2
+}
+
+while (($#)); do
+  case "$1" in
+    --from-hook) FROM_HOOK=1 ;;
+    --with-grok) WITH_GROK=1 ;;
+    --status) STATUS_ONLY=1 ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+  shift
+done
+
+mkdir -p "$STATE"
+cd "$ROOT"
+
+pkg_now() {
+  pacman -Q omawrite 2>/dev/null || echo "omawrite none"
+}
+
+upstream_sha() {
+  "$GIT" rev-parse upstream/master 2>/dev/null || echo "unknown"
+}
+
+write_state() {
+  pkg_now >"$STATE/omawrite-pkg"
+  upstream_sha >"$STATE/upstream-sha"
+}
+
+notify() {
+  local title=$1
+  local body=${2-}
+  if [[ -x $NOTIFY ]]; then
+    "$NOTIFY" --app-name Contrawrite -g "󰷈" "$title" "$body" || true
+  else
+    echo "$title: $body"
+  fi
+}
+
+launch_grok() {
+  local runner="$ROOT/bin/sync-with-grok"
+  if [[ ! -x $GROK ]]; then
+    echo "Contrawrite: grok is not on PATH at $GROK" >&2
+    return 1
+  fi
+  if [[ -x $LAUNCH ]]; then
+    "$LAUNCH" "$runner" || return 1
+  else
+    "$runner" || return 1
+  fi
+}
+
+if [[ ! -d $ROOT/.git ]]; then
+  echo "Contrawrite: $ROOT is not a git checkout" >&2
+  exit 1
+fi
+
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "Contrawrite: sync already running"
+  exit 0
+fi
+
+pkg=$(pkg_now)
+last_pkg=$(cat "$STATE/omawrite-pkg" 2>/dev/null || true)
+
+if ! "$GIT" fetch --quiet upstream; then
+  echo "Contrawrite: could not fetch upstream"
+  if ((FROM_HOOK == 0)); then
+    exit 1
+  fi
+  notify "Contrawrite sync skipped" "Could not fetch omacom-io/omawrite."
+  exit 0
+fi
+
+sha=$(upstream_sha)
+last_sha=$(cat "$STATE/upstream-sha" 2>/dev/null || true)
+already_merged=0
+if "$GIT" merge-base --is-ancestor upstream/master HEAD 2>/dev/null; then
+  already_merged=1
+fi
+
+if ((STATUS_ONLY)); then
+  echo "checkout     $ROOT"
+  echo "omawrite pkg $pkg"
+  echo "last pkg     ${last_pkg:-none}"
+  echo "upstream     $sha"
+  echo "last sha     ${last_sha:-none}"
+  echo "HEAD         $("$GIT" rev-parse --short HEAD)"
+  echo "merged?      $( ((already_merged)) && echo yes || echo no )"
+  exit 0
+fi
+
+if ((already_merged)) && [[ $pkg == "$last_pkg" && $sha == "$last_sha" ]]; then
+  echo "Contrawrite already current ($pkg, $sha)"
+  exit 0
+fi
+
+if ((already_merged)); then
+  echo "Contrawrite: upstream $sha already merged; recording $pkg"
+  write_state
+  exit 0
+fi
+
+if [[ -n $("$GIT" status --porcelain) ]]; then
+  echo "Contrawrite: checkout is dirty; refusing to merge"
+  notify "Contrawrite not updated" "Checkout has uncommitted changes."
+  exit 0
+fi
+
+echo "Contrawrite: merging upstream/master ($sha)"
+if ! "$GIT" merge --no-edit upstream/master; then
+  echo "Contrawrite: merge conflict"
+  if ((WITH_GROK || FROM_HOOK)); then
+    notify "Contrawrite needs a merge" "Opening Grok Build to track the new Omawrite."
+    if ! launch_grok; then
+      "$GIT" merge --abort || true
+      notify "Contrawrite merge failed" "Could not launch Grok Build. Merge aborted."
+    fi
+    exit 0
+  fi
+  echo "Re-run with --with-grok, or resolve the merge by hand." >&2
+  exit 1
+fi
+
+if ! "$ROOT/bin/test"; then
+  echo "Contrawrite: tests failed after merge"
+  if ((WITH_GROK || FROM_HOOK)); then
+    notify "Contrawrite tests failed" "Opening Grok Build to fix the merge."
+    launch_grok || true
+    exit 0
+  fi
+  exit 1
+fi
+
+"$ROOT/bin/install-user"
+"$GIT" push origin HEAD
+write_state
+notify "Contrawrite updated" "Rebuilt against $pkg."
+echo "Contrawrite: installed ~/bin/contrawrite against $pkg"
