@@ -74,11 +74,19 @@ int main(int argc, char *argv[]) {
     QObject *window = engine.rootObjects().constFirst();
     backend.setParentWindow(qobject_cast<QWindow *>(window));
 
+    // Launched on its own, Contrawrite brings back the tabs it had last time.
+    // Asked for particular files, or for a new window, it opens exactly that
+    // and leaves the remembered tabs to the window that owns them.
+    const QStringList args = app.arguments().mid(1);
+    if (args.isEmpty())
+        QMetaObject::invokeMethod(window, "restoreSession");
+
     // Each file named on the command line gets a tab; the window decides
     // whether the blank first tab can take it.
-    const QStringList args = app.arguments();
-    for (int i = 1; i < args.size(); ++i) {
-        const QString path = QFileInfo(args.at(i)).absoluteFilePath();
+    for (const QString &arg : args) {
+        if (arg == QStringLiteral("--new-window"))
+            continue;
+        const QString path = QFileInfo(arg).absoluteFilePath();
         QMetaObject::invokeMethod(window, "requestOpen",
                                   Q_ARG(QVariant, QUrl::fromLocalFile(path)));
     }

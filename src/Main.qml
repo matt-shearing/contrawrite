@@ -59,6 +59,36 @@ ApplicationWindow {
     readonly property bool tabsLocked: askingUnsaved || askingExternal || awaitingPendingSave
     property var externalChanges: []
 
+    // Session. The window that owns it (see restoreSession) writes down which
+    // files are in its tabs whenever that changes, so a crash forgets nothing.
+    property bool ownsSession: false
+    readonly property var sessionFiles: {
+        var files = [];
+        for (var i = 0; i < pages.length; ++i) {
+            if (pages[i].backend.fileUrl.toString() !== "")
+                files.push(pages[i].backend.fileUrl.toString());
+        }
+        return files;
+    }
+    // Closing the window removes each tab whose edits are discarded. Those
+    // files lost their edits, not their place in the session.
+    property bool closingWindow: false
+    property bool completingAction: false
+    property var closeOrder: []
+    property string closeCurrent: ""
+    property var discardedOnClose: []
+
+    onSessionFilesChanged: saveSession()
+    onCurrentPageChanged: saveSession()
+    onPendingActionChanged: {
+        // Cleared by anything but a completed answer, the close was called off.
+        if (pendingAction === "" && !completingAction && closingWindow) {
+            closingWindow = false;
+            discardedOnClose = [];
+            saveSession();
+        }
+    }
+
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
     color: pageColor
@@ -74,6 +104,15 @@ ApplicationWindow {
         close.accepted = false;
         if (askingExternal)
             return;
+
+        if (!closingWindow) {
+            closingWindow = true;
+            closeOrder = sessionFiles.slice();
+            // Asking about unsaved tabs moves between them; the tab to come
+            // back to is the one in use when the close began.
+            closeCurrent = currentPage.backend.fileUrl.toString();
+            discardedOnClose = [];
+        }
 
         // Already asking about a tab: carry on closing once that is answered.
         if (askingUnsaved || awaitingPendingSave) {
@@ -200,17 +239,60 @@ ApplicationWindow {
 
     function completePendingAction(discarded) {
         var action = pendingAction;
+        completingAction = true;
         pendingAction = "";
+        completingAction = false;
         if (action === "closeTab") {
             removePage(currentPage);
         } else if (action === "close") {
             // A discarded document is still modified, so its tab has to go
             // before closing again, which then asks about the next unsaved tab.
-            if (discarded)
+            if (discarded) {
+                if (backend.fileUrl.toString() !== "")
+                    discardedOnClose = discardedOnClose.concat([backend.fileUrl.toString()]);
                 removePage(currentPage);
+            }
             if (!closeConfirmed)
                 close();
         }
+    }
+
+    // Called by main() for a window launched on its own. Whichever window
+    // claims the session first reopens last time's files and owns the list
+    // until it exits; any other window starts blank and leaves the list alone.
+    function restoreSession() {
+        if (ownsSession || !FirstBackend.instance.claimSession())
+            return;
+
+        // Files a crash recovered already have tabs; requestOpen finds those.
+        var session = FirstBackend.instance.savedSession();
+        for (var i = 0; i < session.files.length; ++i)
+            requestOpen(session.files[i]);
+        if (session.current.toString() !== "")
+            activatePage(pageForUrl(session.current));
+
+        ownsSession = true;
+        saveSession();
+    }
+
+    function sessionToSave() {
+        if (!closingWindow)
+            return sessionFiles;
+
+        var kept = closeOrder.filter(function(file) {
+            return sessionFiles.indexOf(file) >= 0 || discardedOnClose.indexOf(file) >= 0;
+        });
+        return kept.concat(sessionFiles.filter(function(file) { return kept.indexOf(file) < 0; }));
+    }
+
+    function saveSession() {
+        // No current page means the window is being torn down.
+        if (!ownsSession || !currentPage)
+            return;
+        // Ask the page, not `backend`: this runs as currentPage changes, and
+        // the window's `backend` may not have caught up with it yet.
+        FirstBackend.instance.saveSession(sessionToSave(), closingWindow
+            ? closeCurrent : currentPage.backend.fileUrl);
     }
 
     // Several open files can change at once (a git checkout, a sync). Ask about

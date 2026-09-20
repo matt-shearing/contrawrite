@@ -21,6 +21,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
@@ -213,6 +214,70 @@ QString Backend::fileName() const {
     return name.isEmpty() ? QStringLiteral("Untitled.md") : name;
 }
 
+QString Backend::sessionPath() const {
+    // Omawrite keeps its state in this directory too and may one day want the
+    // name session.json for itself.
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+        .filePath(QStringLiteral("contrawrite-session.json"));
+}
+
+bool Backend::claimSession() {
+    if (m_sessionLock)
+        return true;
+
+    // Two windows that both brought back the same tabs would autosave over each
+    // other, so one window at a time owns the session: the first to ask.
+    QDir().mkpath(QFileInfo(sessionPath()).absolutePath());
+    auto lock = std::make_unique<QLockFile>(sessionPath() + QStringLiteral(".lock"));
+    if (!lock->tryLock())
+        return false;
+    m_sessionLock = std::move(lock);
+    return true;
+}
+
+QVariantMap Backend::savedSession() const {
+    QVariantList files;
+    QUrl current;
+    QFile file(sessionPath());
+    if (file.open(QIODevice::ReadOnly)) {
+        const QJsonObject session = QJsonDocument::fromJson(file.readAll()).object();
+        const QString currentPath = session.value(QStringLiteral("current")).toString();
+        const QJsonArray paths = session.value(QStringLiteral("files")).toArray();
+        for (const QJsonValue &value : paths) {
+            // A file moved or deleted since then is left out, not shown as an error.
+            const QString path = value.toString();
+            if (path.isEmpty() || !QFileInfo(path).isFile())
+                continue;
+            files.append(QUrl::fromLocalFile(path));
+            if (path == currentPath)
+                current = QUrl::fromLocalFile(path);
+        }
+    }
+    return {{QStringLiteral("files"), files}, {QStringLiteral("current"), current}};
+}
+
+void Backend::saveSession(const QVariantList &files, const QUrl &current) {
+    if (!m_sessionLock)
+        return;
+
+    QJsonArray paths;
+    for (const QVariant &file : files) {
+        const QUrl url = file.toUrl();
+        if (url.isLocalFile())
+            paths.append(QFileInfo(url.toLocalFile()).absoluteFilePath());
+    }
+    const QJsonObject session{
+        {QStringLiteral("files"), paths},
+        {QStringLiteral("current"), current.isLocalFile()
+             ? QFileInfo(current.toLocalFile()).absoluteFilePath() : QString()}};
+
+    QSaveFile out(sessionPath());
+    if (!out.open(QIODevice::WriteOnly))
+        return;
+    out.write(QJsonDocument(session).toJson(QJsonDocument::Compact));
+    out.commit();
+}
+
 void Backend::setDarkMode(bool darkMode) {
     if (m_darkMode == darkMode)
         return;
@@ -366,7 +431,7 @@ void Backend::printDocument() {
 
 void Backend::newWindow() {
     const bool started = QProcess::startDetached(QCoreApplication::applicationFilePath(),
-                                                 QStringList());
+                                                 QStringList{QStringLiteral("--new-window")});
     if (!started)
         setStatus(QStringLiteral("Could not open a new window."));
 }

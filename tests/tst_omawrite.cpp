@@ -1,6 +1,7 @@
 #include <QtTest>
 #include <QFile>
 #include <QFont>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQmlComponent>
@@ -30,7 +31,9 @@ private slots:
         // A window gives every crash snapshot it finds a tab, so one test's
         // leftovers must not turn up as extra tabs in the next.
         QDir state(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
-        const auto leftovers = state.entryList({QStringLiteral("recovery-*")}, QDir::Files);
+        const auto leftovers = state.entryList({QStringLiteral("recovery-*"),
+                                                QStringLiteral("contrawrite-session*")},
+                                               QDir::Files);
         for (const QString &leftover : leftovers)
             state.remove(leftover);
     }
@@ -691,6 +694,183 @@ private slots:
         snapshots.sort();
         QCOMPARE(snapshots, QStringList({QStringLiteral("another draft"),
                                          QStringLiteral("one draft")}));
+    }
+
+    void bringsBackLastSessionsTabs() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl third = writeFile(directory.filePath(QStringLiteral("third.md")), "gamma");
+        {
+            TabbedWindow tabs;
+            QVERIFY2(tabs.load(), qPrintable(tabs.error));
+            tabs.call("restoreSession");
+            QCOMPARE(tabs.count(), 1);
+            tabs.open(first);
+            tabs.open(second);
+            tabs.open(third);
+            tabs.call("newTab");
+            tabs.call("activateTab", 1);
+        }
+
+        TabbedWindow next;
+        QVERIFY2(next.load(), qPrintable(next.error));
+        next.call("restoreSession");
+        // The blank tab had nothing in it to bring back.
+        QCOMPARE(next.count(), 3);
+        QCOMPARE(next.title(0), QStringLiteral("first.md"));
+        QCOMPARE(next.title(1), QStringLiteral("second.md"));
+        QCOMPARE(next.title(2), QStringLiteral("third.md"));
+        QCOMPARE(next.currentIndex(), 1);
+        QCOMPARE(next.editors().at(2)->property("text").toString(), QStringLiteral("gamma"));
+        QVERIFY(!next.document(0)->modified());
+
+        // A tab closed on purpose stays closed next time.
+        next.call("closeTab", 0);
+        next.window.reset();
+        TabbedWindow last;
+        QVERIFY2(last.load(), qPrintable(last.error));
+        QVERIFY(!last.backend.claimSession());
+    }
+
+    void leavesTheSessionToTheWindowThatOwnsIt() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl other = writeFile(directory.filePath(QStringLiteral("other.md")), "omega");
+        {
+            TabbedWindow owner;
+            QVERIFY2(owner.load(), qPrintable(owner.error));
+            owner.call("restoreSession");
+            owner.open(first);
+            owner.open(second);
+
+            // A second window while the first is up: blank, and its tabs are
+            // not what gets remembered.
+            TabbedWindow side;
+            QVERIFY2(side.load(), qPrintable(side.error));
+            side.call("restoreSession");
+            QCOMPARE(side.count(), 1);
+            QVERIFY(side.backend.fileUrl().isEmpty());
+            side.open(other);
+
+            // Nor are those of a window that was opened for a file and never asked.
+            TabbedWindow forFile;
+            QVERIFY2(forFile.load(), qPrintable(forFile.error));
+            forFile.open(other);
+        }
+
+        TabbedWindow next;
+        QVERIFY2(next.load(), qPrintable(next.error));
+        next.call("restoreSession");
+        QCOMPARE(next.count(), 2);
+        QCOMPARE(next.title(0), QStringLiteral("first.md"));
+        QCOMPARE(next.title(1), QStringLiteral("second.md"));
+    }
+
+    void keepsADiscardedFilesPlaceInTheSession() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl third = writeFile(directory.filePath(QStringLiteral("third.md")), "gamma");
+        {
+            TabbedWindow tabs;
+            QVERIFY2(tabs.load(), qPrintable(tabs.error));
+            tabs.call("restoreSession");
+            tabs.open(first);
+            tabs.open(second);
+            tabs.open(third);
+            tabs.editors().at(0)->setProperty("text", QStringLiteral("alpha, regretted"));
+            tabs.call("activateTab", 1);
+
+            QVERIFY(QMetaObject::invokeMethod(tabs.window.data(), "close"));
+            QCOMPARE(tabs.currentIndex(), 0);
+            tabs.answerUnsaved("discardRequested");
+            QTRY_VERIFY(!tabs.window->property("visible").toBool());
+        }
+
+        // The edits went; the file keeps its tab, and the tab in use at the
+        // time is the one that comes back in front.
+        TabbedWindow next;
+        QVERIFY2(next.load(), qPrintable(next.error));
+        next.call("restoreSession");
+        QCOMPARE(next.count(), 3);
+        QCOMPARE(next.title(0), QStringLiteral("first.md"));
+        QCOMPARE(next.title(1), QStringLiteral("second.md"));
+        QCOMPARE(next.currentIndex(), 1);
+        QCOMPARE(next.editors().at(0)->property("text").toString(), QStringLiteral("alpha"));
+    }
+
+    void forgetsADiscardedTabWhenTheCloseIsCalledOff() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        {
+            TabbedWindow tabs;
+            QVERIFY2(tabs.load(), qPrintable(tabs.error));
+            tabs.call("restoreSession");
+            tabs.open(first);
+            tabs.open(second);
+            tabs.editors().at(0)->setProperty("text", QStringLiteral("alpha, regretted"));
+            tabs.editors().at(1)->setProperty("text", QStringLiteral("beta, still going"));
+
+            QVERIFY(QMetaObject::invokeMethod(tabs.window.data(), "close"));
+            tabs.answerUnsaved("discardRequested");
+            QCOMPARE(tabs.count(), 1);
+            QVERIFY(tabs.window->property("askingUnsaved").toBool());
+            QVERIFY(QMetaObject::invokeMethod(tabs.unsavedDialog(), "reject"));
+            QVERIFY(tabs.window->property("visible").toBool());
+            QVERIFY(!tabs.window->property("closingWindow").toBool());
+            tabs.document(0)->save();
+        }
+
+        // The window stayed open without the first file, so that is the session.
+        TabbedWindow next;
+        QVERIFY2(next.load(), qPrintable(next.error));
+        next.call("restoreSession");
+        QCOMPARE(next.count(), 1);
+        QCOMPARE(next.title(0), QStringLiteral("second.md"));
+        QCOMPARE(next.editors().at(0)->property("text").toString(),
+                 QStringLiteral("beta, still going"));
+    }
+
+    void reopensARecoveredFileOnlyOnce() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl gone = QUrl::fromLocalFile(directory.filePath(QStringLiteral("gone.md")));
+
+        // What a crash leaves: the session, and a snapshot of the unsaved tab.
+        const QDir state(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        QVERIFY(QDir().mkpath(state.path()));
+        const QJsonObject session{
+            {QStringLiteral("files"), QJsonArray{first.toLocalFile(), gone.toLocalFile(),
+                                                 second.toLocalFile()}},
+            {QStringLiteral("current"), second.toLocalFile()}};
+        writeFile(state.filePath(QStringLiteral("contrawrite-session.json")),
+                  QJsonDocument(session).toJson());
+        const QJsonObject snapshot{{QStringLiteral("fileUrl"), first.toString()},
+                                   {QStringLiteral("text"), QStringLiteral("alpha, unsaved")}};
+        writeFile(state.filePath(QStringLiteral("recovery-0.json")),
+                  QJsonDocument(snapshot).toJson());
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.call("restoreSession");
+
+        // One tab for first.md, holding the recovered text; gone.md is skipped.
+        QCOMPARE(tabs.count(), 2);
+        QCOMPARE(tabs.title(0), QStringLiteral("first.md"));
+        QCOMPARE(tabs.editors().at(0)->property("text").toString(),
+                 QStringLiteral("alpha, unsaved"));
+        QVERIFY(tabs.document(0)->modified());
+        QCOMPARE(tabs.title(1), QStringLiteral("second.md"));
+        QCOMPARE(tabs.currentIndex(), 1);
     }
 
     void namesTabsSoTheyCanBeToldApart() {

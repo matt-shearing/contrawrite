@@ -21,7 +21,7 @@ cat > "$DESKTOP_DIR/contrawrite.desktop" <<EOF
 Type=Application
 Name=Contrawrite
 GenericName=Markdown Writer
-Comment=Omawrite with tabs, 30-second autosave and local checkpoints
+Comment=Omawrite with tabs that come back, 30-second autosave and local checkpoints
 Exec=${BIN_DIR}/contrawrite %f
 Icon=contrawrite
 Terminal=false

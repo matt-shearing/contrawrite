@@ -1,7 +1,8 @@
 # Contrawrite
 
 A personal fork of [Omawrite](https://github.com/omacom-io/omawrite): the same
-dead-simple Markdown writer, with tabs, 30-second autosave and local checkpoints.
+dead-simple Markdown writer, with tabs that come back the next time you launch it,
+30-second autosave and local checkpoints.
 
 On this machine Super+Shift+W launches Contrawrite. Stock Omawrite stays
 installed as its own app.
@@ -41,6 +42,18 @@ Each tab keeps its own undo history, cursor, scroll position, autosave and
 checkpoints. Closing a tab with unsaved changes asks what to do with them, and
 closing the window asks about each unsaved tab in turn. Closing the last tab
 closes the window.
+
+Launched on its own, Contrawrite reopens the files that were in its tabs last
+time, in the same order, with the same tab in front. It writes the list down
+whenever the tabs change, so the tabs also come back after a crash or a power cut.
+A file that has since been moved or deleted is left out. A tab you close on
+purpose stays closed.
+
+One window at a time remembers its tabs: the first one launched on its own. While
+it is running, a second launch starts blank, because two windows holding the same
+files would autosave over each other. A window opened for a particular file, from
+the file manager or as `contrawrite notes.md`, shows that file alone, and
+`Ctrl+N` always gives a blank window. Neither changes the remembered tabs.
 
 Named files autosave every 30 seconds while they have unsaved edits. Each autosave
 and manual save keeps a local checkpoint; the clock icon in the footer (or

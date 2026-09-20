@@ -3,6 +3,7 @@
 A personal fork of [Omawrite](https://github.com/omacom-io/omawrite). Same editor, plus:
 
 - Tabs, so one window holds several documents (`Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`)
+- The last session's tabs reopen on a plain launch
 - 30-second autosave of named files
 - Local checkpoints, revert from the footer clock or `Ctrl+Shift+H`
 
@@ -21,6 +22,7 @@ Omawrite's pitch is "no vaults, no plugins, just you and the words." Autosave of
 | Upstream remote | `upstream` → `omacom-io/omawrite` |
 | Binary | `~/bin/contrawrite` |
 | Checkpoints | `~/.local/share/Omacom/omawrite/history/` (same AppData as Omawrite, so existing snapshots survive) |
+| Remembered tabs | `~/.local/share/Omacom/omawrite/contrawrite-session.json` |
 | Last sync state | `~/.local/state/contrawrite/` |
 
 The `.pro` target stays `omawrite` on purpose. Fewer conflicts when DHH touches the build file; `bin/install-user` copies `build/omawrite` to `~/bin/contrawrite`.

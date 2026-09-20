@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 #include <memory>
 
 class MarkdownHighlighter;
@@ -89,6 +90,12 @@ public:
     Q_INVOKABLE void closeDocument();
     Q_INVOKABLE bool hasOrphanedRecovery() const;
 
+    // Session. The first window to claim it reopens the files its predecessor
+    // had in tabs, and keeps the list current for whichever window comes next.
+    Q_INVOKABLE bool claimSession();
+    Q_INVOKABLE QVariantMap savedSession() const;
+    Q_INVOKABLE void saveSession(const QVariantList &files, const QUrl &current);
+
 signals:
     void fileUrlChanged();
     void modifiedChanged();
@@ -122,6 +129,7 @@ private:
     void restoreRecovery();
     void clearRecovery();
     QString recoveryPath() const;
+    QString sessionPath() const;
     void watchCurrentFile();
     void loadOmarchyTheme();
     void watchOmarchyTheme();
@@ -160,6 +168,7 @@ private:
     bool m_hasKnownFileContents = false;
     QString m_recoveryPath;
     std::unique_ptr<QLockFile> m_recoveryLock;
+    std::unique_ptr<QLockFile> m_sessionLock;
 
     QString m_themeBackground;
     QString m_themeForeground;
