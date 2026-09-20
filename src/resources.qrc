@@ -7,6 +7,9 @@
         <file alias="UnsavedChangesDialog.qml">UnsavedChangesDialog.qml</file>
         <file alias="ExternalChangeDialog.qml">ExternalChangeDialog.qml</file>
         <file alias="HistoryPopup.qml">HistoryPopup.qml</file>
+        <file alias="TabStrip.qml">TabStrip.qml</file>
+        <file alias="FirstBackend.qml">FirstBackend.qml</file>
+        <file alias="qmldir">qmldir</file>
         <file alias="EditorMutations.js">EditorMutations.js</file>
         <file alias="fonts/iAWriterMonoS-Regular.ttf">../fonts/iAWriterMonoS-Regular.ttf</file>
         <file alias="fonts/iAWriterMonoS-Italic.ttf">../fonts/iAWriterMonoS-Italic.ttf</file>

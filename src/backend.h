@@ -83,6 +83,12 @@ public:
     Q_INVOKABLE void setAutosaveInterval(int msec);
     int autosaveInterval() const;
 
+    // Tabs. Every tab edits through a Backend of its own. The first tab takes
+    // the one main() made; each later tab asks that one for a sibling.
+    Q_INVOKABLE Backend *createSibling();
+    Q_INVOKABLE void closeDocument();
+    Q_INVOKABLE bool hasOrphanedRecovery() const;
+
 signals:
     void fileUrlChanged();
     void modifiedChanged();

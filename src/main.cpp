@@ -9,6 +9,7 @@
 #include <QUrl>
 #include <QWindow>
 #include <QFile>
+#include <QFileInfo>
 
 #include "backend.h"
 #include "systemtheme.h"
@@ -70,11 +71,17 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    backend.setParentWindow(qobject_cast<QWindow *>(engine.rootObjects().constFirst()));
+    QObject *window = engine.rootObjects().constFirst();
+    backend.setParentWindow(qobject_cast<QWindow *>(window));
 
+    // Each file named on the command line gets a tab; the window decides
+    // whether the blank first tab can take it.
     const QStringList args = app.arguments();
-    if (args.size() > 1 && !backend.modified())
-        backend.open(QUrl::fromLocalFile(args.at(1)));
+    for (int i = 1; i < args.size(); ++i) {
+        const QString path = QFileInfo(args.at(i)).absoluteFilePath();
+        QMetaObject::invokeMethod(window, "requestOpen",
+                                  Q_ARG(QVariant, QUrl::fromLocalFile(path)));
+    }
 
     return app.exec();
 }

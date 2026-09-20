@@ -132,8 +132,11 @@ if [[ -n $("$GIT" status --porcelain) ]]; then
   exit 0
 fi
 
+# Tabs wrap Omawrite's editor block in a page component, which re-indents it
+# and changes nothing else. ignore-space-change lets upstream's edits to those
+# lines merge cleanly; they arrive at upstream's indentation, which QML accepts.
 echo "Contrawrite: merging upstream/master ($sha)"
-if ! "$GIT" merge --no-edit upstream/master; then
+if ! "$GIT" merge --no-edit -Xignore-space-change upstream/master; then
   echo "Contrawrite: merge conflict"
   if ((WITH_GROK || FROM_HOOK)); then
     notify "Contrawrite needs a merge" "Opening Grok Build to track the new Omawrite."

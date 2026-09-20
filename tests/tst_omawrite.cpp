@@ -1,11 +1,14 @@
 #include <QtTest>
 #include <QFile>
 #include <QFont>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
 #include <QStandardPaths>
+#include <QWindow>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -21,6 +24,15 @@ private slots:
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
                            m_settingsDirectory.path());
+    }
+
+    void init() {
+        // A window gives every crash snapshot it finds a tab, so one test's
+        // leftovers must not turn up as extra tabs in the next.
+        QDir state(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        const auto leftovers = state.entryList({QStringLiteral("recovery-*")}, QDir::Files);
+        for (const QString &leftover : leftovers)
+            state.remove(leftover);
     }
 
     void countsWords() {
@@ -353,7 +365,427 @@ private slots:
         QCOMPARE(QString::fromUtf8(saved.readAll()), QStringLiteral("after interval"));
     }
 
+    void opensEachFileInItsOwnTab() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        QCOMPARE(tabs.count(), 1);
+        QVERIFY(!tabs.window->findChild<QObject *>(QStringLiteral("tabStrip"))
+                     ->property("visible").toBool());
+
+        // The blank first tab has nothing to lose, so it takes the file.
+        tabs.open(first);
+        QCOMPARE(tabs.count(), 1);
+        QCOMPARE(tabs.backend.fileName(), QStringLiteral("first.md"));
+
+        tabs.open(second);
+        QCOMPARE(tabs.count(), 2);
+        QCOMPARE(tabs.currentIndex(), 1);
+        QCOMPARE(tabs.document(1)->fileName(), QStringLiteral("second.md"));
+        QCOMPARE(tabs.backend.fileName(), QStringLiteral("first.md"));
+        QVERIFY(tabs.window->property("title").toString().contains(QStringLiteral("second.md")));
+        QVERIFY(tabs.window->findChild<QObject *>(QStringLiteral("tabStrip"))
+                    ->property("visible").toBool());
+
+        const auto editors = tabs.editors();
+        QCOMPARE(editors.size(), 2);
+        QCOMPARE(editors.at(0)->property("text").toString(), QStringLiteral("alpha"));
+        QCOMPARE(editors.at(1)->property("text").toString(), QStringLiteral("beta"));
+
+        // A file that already has a tab is brought forward, not opened twice.
+        tabs.open(first);
+        QCOMPARE(tabs.count(), 2);
+        QCOMPARE(tabs.currentIndex(), 0);
+        QVERIFY(tabs.window->property("title").toString().contains(QStringLiteral("first.md")));
+
+        tabs.call("cycleTab", 1);
+        QCOMPARE(tabs.currentIndex(), 1);
+        tabs.call("cycleTab", 1);
+        QCOMPARE(tabs.currentIndex(), 0);
+
+        tabs.call("closeTab", 1);
+        QCOMPARE(tabs.count(), 1);
+        QCOMPARE(tabs.document(0), &tabs.backend);
+    }
+
+    void drivesTabsFromTheKeyboard() {
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        auto *window = qobject_cast<QWindow *>(tabs.window.data());
+        QVERIFY(window);
+        window->requestActivate();
+        QVERIFY(QTest::qWaitForWindowActive(window));
+
+        QTest::keyClick(window, Qt::Key_T, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_T, Qt::ControlModifier);
+        QCOMPARE(tabs.count(), 3);
+        QCOMPARE(tabs.currentIndex(), 2);
+
+        QTest::keyClick(window, Qt::Key_Tab, Qt::ControlModifier);
+        QCOMPARE(tabs.currentIndex(), 0);
+        QTest::keyClick(window, Qt::Key_Backtab, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(tabs.currentIndex(), 2);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(tabs.currentIndex(), 1);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(tabs.currentIndex(), 2);
+        QTest::keyClick(window, Qt::Key_1, Qt::AltModifier);
+        QCOMPARE(tabs.currentIndex(), 0);
+        QTest::keyClick(window, Qt::Key_3, Qt::AltModifier);
+        QCOMPARE(tabs.currentIndex(), 2);
+
+        // Typing lands in the tab that is showing.
+        QTest::keyClick(window, Qt::Key_A);
+        QCOMPARE(tabs.editors().at(2)->property("text").toString(), QStringLiteral("a"));
+        QCOMPARE(tabs.editors().at(0)->property("text").toString(), QString());
+
+        QTest::keyClick(window, Qt::Key_2, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_W, Qt::ControlModifier);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCOMPARE(tabs.count(), 2);
+        QCOMPARE(tabs.editors().at(1)->property("text").toString(), QStringLiteral("a"));
+    }
+
+    void keepsEachTabsEditsToItself() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString secondPath = directory.filePath(QStringLiteral("second.md"));
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(secondPath, "beta");
+
+        TabbedWindow tabs;
+        tabs.backend.setAutosaveInterval(80);
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.open(first);
+        tabs.open(second);
+        QCOMPARE(tabs.document(1)->autosaveInterval(), 80);
+
+        tabs.editors().at(1)->setProperty("text", QStringLiteral("beta, reworked"));
+        QVERIFY(tabs.document(1)->modified());
+        QVERIFY(!tabs.backend.modified());
+        QCOMPARE(tabs.editors().at(0)->property("text").toString(), QStringLiteral("alpha"));
+
+        // A tab in the background still saves itself.
+        tabs.call("activateTab", 0);
+        QTRY_COMPARE(tabs.document(1)->modified(), false);
+        QCOMPARE(readFile(secondPath), QStringLiteral("beta, reworked"));
+        QCOMPARE(readFile(first.toLocalFile()), QStringLiteral("alpha"));
+    }
+
+    void neverSavesATabThatWasDiscarded() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl third = writeFile(directory.filePath(QStringLiteral("third.md")), "gamma");
+
+        TabbedWindow tabs;
+        tabs.backend.setAutosaveInterval(150);
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.open(first);
+        tabs.open(second);
+        tabs.open(third);
+        QCOMPARE(tabs.count(), 3);
+
+        // A later tab's document goes when its tab does.
+        tabs.editors().at(1)->setProperty("text", QStringLiteral("beta, regretted"));
+        tabs.call("closeTab", 1);
+        QCOMPARE(tabs.count(), 3);
+        QCOMPARE(tabs.currentIndex(), 1);
+        // Answer at once: waiting for the dialog to finish opening would give
+        // this test's very short autosave interval time to fire first.
+        QVERIFY(tabs.window->property("askingUnsaved").toBool());
+        tabs.answerUnsaved("discardRequested");
+        QCOMPARE(tabs.count(), 2);
+
+        // The first tab's document belongs to main() and outlives its tab, so
+        // it has to be told to stop.
+        tabs.editors().at(0)->setProperty("text", QStringLiteral("alpha, regretted"));
+        tabs.call("closeTab", 0);
+        tabs.answerUnsaved("discardRequested");
+        QCOMPARE(tabs.count(), 1);
+        QCOMPARE(tabs.document(0)->fileName(), QStringLiteral("third.md"));
+
+        QTest::qWait(500);
+        QCOMPARE(readFile(first.toLocalFile()), QStringLiteral("alpha"));
+        QCOMPARE(readFile(second.toLocalFile()), QStringLiteral("beta"));
+    }
+
+    void asksAboutEveryUnsavedTabBeforeClosing() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl third = writeFile(directory.filePath(QStringLiteral("third.md")), "gamma");
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.open(first);
+        tabs.open(second);
+        tabs.open(third);
+        tabs.editors().at(0)->setProperty("text", QStringLiteral("alpha, kept"));
+        tabs.editors().at(2)->setProperty("text", QStringLiteral("gamma, dropped"));
+        tabs.call("activateTab", 1);
+
+        QVERIFY(QMetaObject::invokeMethod(tabs.window.data(), "close"));
+        QVERIFY(tabs.window->property("visible").toBool());
+        QCOMPARE(tabs.currentIndex(), 0);
+        QVERIFY(tabs.window->property("askingUnsaved").toBool());
+        QTRY_VERIFY(tabs.unsavedDialog()->property("opened").toBool());
+        QCOMPARE(tabs.unsavedDialog()->property("fileName").toString(), QStringLiteral("first.md"));
+
+        // Saving the first moves the question on to the next unsaved tab.
+        tabs.answerUnsaved("saveRequested");
+        QCOMPARE(readFile(first.toLocalFile()), QStringLiteral("alpha, kept"));
+        QVERIFY(tabs.window->property("visible").toBool());
+        QCOMPARE(tabs.currentIndex(), 2);
+        QVERIFY(tabs.window->property("askingUnsaved").toBool());
+        QTRY_VERIFY(tabs.unsavedDialog()->property("opened").toBool());
+        QCOMPARE(tabs.unsavedDialog()->property("fileName").toString(), QStringLiteral("third.md"));
+
+        tabs.answerUnsaved("discardRequested");
+        QTRY_VERIFY(!tabs.window->property("visible").toBool());
+        QCOMPARE(readFile(third.toLocalFile()), QStringLiteral("gamma"));
+    }
+
+    void cancellingTheQuestionKeepsTheWindowOpen() {
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.call("newTab");
+        tabs.editors().at(1)->setProperty("text", QStringLiteral("not done yet"));
+
+        QVERIFY(QMetaObject::invokeMethod(tabs.window.data(), "close"));
+        QVERIFY(tabs.window->property("askingUnsaved").toBool());
+        QTRY_VERIFY(tabs.unsavedDialog()->property("opened").toBool());
+        QVERIFY(QMetaObject::invokeMethod(tabs.unsavedDialog(), "reject"));
+
+        QVERIFY(tabs.window->property("visible").toBool());
+        QCOMPARE(tabs.count(), 2);
+        QCOMPARE(tabs.window->property("pendingAction").toString(), QString());
+        QCOMPARE(tabs.editors().at(1)->property("text").toString(), QStringLiteral("not done yet"));
+    }
+
+    void asksAboutFilesChangedElsewhereOneTabAtATime() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QUrl first = writeFile(directory.filePath(QStringLiteral("first.md")), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+        const QUrl third = writeFile(directory.filePath(QStringLiteral("third.md")), "gamma");
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.open(first);
+        tabs.open(second);
+        tabs.open(third);
+        QObject *dialog = tabs.window->findChild<QObject *>(QStringLiteral("externalChangeDialog"));
+        QVERIFY(dialog);
+
+        // A sync or a git checkout rewrites two background files together.
+        writeFile(first.toLocalFile(), "alpha from elsewhere");
+        writeFile(second.toLocalFile(), "beta from elsewhere");
+
+        QTRY_VERIFY(tabs.window->property("askingExternal").toBool());
+        const int firstAsked = tabs.currentIndex();
+        QVERIFY(firstAsked == 0 || firstAsked == 1);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+
+        // While the question stands, the tabs hold still.
+        tabs.call("activateTab", 2);
+        QCOMPARE(tabs.currentIndex(), firstAsked);
+
+        QMetaObject::invokeMethod(dialog, "close");
+        QMetaObject::invokeMethod(dialog, "reloadRequested");
+
+        // Then the other file gets its turn, in its own tab.
+        const int secondAsked = 1 - firstAsked;
+        QTRY_COMPARE(tabs.currentIndex(), secondAsked);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QMetaObject::invokeMethod(dialog, "close");
+        QMetaObject::invokeMethod(dialog, "reloadRequested");
+        QTRY_VERIFY(!tabs.window->property("askingExternal").toBool());
+
+        QCOMPARE(tabs.editors().at(0)->property("text").toString(),
+                 QStringLiteral("alpha from elsewhere"));
+        QCOMPARE(tabs.editors().at(1)->property("text").toString(),
+                 QStringLiteral("beta from elsewhere"));
+        QCOMPARE(tabs.editors().at(2)->property("text").toString(), QStringLiteral("gamma"));
+    }
+
+    void freesTheTabsWhenASaveFails() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString lockedDirectory = directory.filePath(QStringLiteral("locked"));
+        QVERIFY(QDir().mkpath(lockedDirectory));
+        const QUrl first = writeFile(lockedDirectory + QStringLiteral("/first.md"), "alpha");
+        const QUrl second = writeFile(directory.filePath(QStringLiteral("second.md")), "beta");
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.open(first);
+        tabs.open(second);
+        tabs.editors().at(0)->setProperty("text", QStringLiteral("alpha, unsaveable"));
+
+        // An atomic save writes a temporary file beside the target first.
+        QFile::setPermissions(lockedDirectory, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+        struct Unlock {
+            QString path;
+            ~Unlock() { QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                        | QFileDevice::ExeOwner); }
+        } unlock{lockedDirectory};
+
+        tabs.call("closeTab", 0);
+        tabs.answerUnsaved("saveRequested");
+
+        // Nothing closed, the text is still there, and the tabs are usable.
+        QCOMPARE(tabs.count(), 2);
+        QVERIFY(tabs.backend.modified());
+        QVERIFY(!tabs.window->property("tabsLocked").toBool());
+        tabs.call("activateTab", 1);
+        QCOMPARE(tabs.currentIndex(), 1);
+        QCOMPARE(tabs.editors().at(0)->property("text").toString(),
+                 QStringLiteral("alpha, unsaveable"));
+    }
+
+    void givesEveryCrashSnapshotATab() {
+        const QDir state(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        QVERIFY(QDir().mkpath(state.path()));
+        writeFile(state.filePath(QStringLiteral("recovery-0.json")),
+                  "{\"fileUrl\":\"\",\"text\":\"first lost draft\"}");
+        writeFile(state.filePath(QStringLiteral("recovery-3.json")),
+                  "{\"fileUrl\":\"\",\"text\":\"second lost draft\"}");
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        QCOMPARE(tabs.count(), 2);
+        QCOMPARE(tabs.currentIndex(), 0);
+
+        QStringList recovered;
+        for (QObject *editor : tabs.editors())
+            recovered.append(editor->property("text").toString());
+        recovered.sort();
+        QCOMPARE(recovered, QStringList({QStringLiteral("first lost draft"),
+                                         QStringLiteral("second lost draft")}));
+        QVERIFY(tabs.document(0)->modified());
+        QVERIFY(tabs.document(1)->modified());
+    }
+
+    void snapshotsEachUnsavedTabSeparately() {
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.call("newTab");
+        tabs.editors().at(0)->setProperty("text", QStringLiteral("one draft"));
+        tabs.editors().at(1)->setProperty("text", QStringLiteral("another draft"));
+
+        const QDir state(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        QTRY_COMPARE(state.entryList({QStringLiteral("recovery-*.json")}, QDir::Files).size(), 2);
+
+        QStringList snapshots;
+        for (const QString &name : state.entryList({QStringLiteral("recovery-*.json")}, QDir::Files)) {
+            snapshots.append(QJsonDocument::fromJson(readFile(state.filePath(name)).toUtf8())
+                                 .object().value(QStringLiteral("text")).toString());
+        }
+        snapshots.sort();
+        QCOMPARE(snapshots, QStringList({QStringLiteral("another draft"),
+                                         QStringLiteral("one draft")}));
+    }
+
+    void namesTabsSoTheyCanBeToldApart() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("atlas")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("borealis")));
+        const QUrl atlas = writeFile(directory.filePath(QStringLiteral("atlas/README.md")), "a");
+        const QUrl borealis = writeFile(directory.filePath(QStringLiteral("borealis/README.md")), "b");
+        const QUrl notes = writeFile(directory.filePath(QStringLiteral("atlas/notes.md")), "n");
+
+        TabbedWindow tabs;
+        QVERIFY2(tabs.load(), qPrintable(tabs.error));
+        tabs.open(atlas);
+        QCOMPARE(tabs.title(0), QStringLiteral("README.md"));
+
+        tabs.open(borealis);
+        tabs.open(notes);
+        QCOMPARE(tabs.title(0), QStringLiteral("atlas/README.md"));
+        QCOMPARE(tabs.title(1), QStringLiteral("borealis/README.md"));
+        QCOMPARE(tabs.title(2), QStringLiteral("notes.md"));
+
+        // A tab with no file yet goes by its first line.
+        tabs.call("newTab");
+        QCOMPARE(tabs.title(3), QStringLiteral("Untitled"));
+        tabs.editors().at(3)->setProperty("text", QStringLiteral("# Launch plan\n\nBody"));
+        QCOMPARE(tabs.title(3), QStringLiteral("Launch plan"));
+    }
+
 private:
+    // Main.qml around a first backend, the way main() sets it up.
+    struct TabbedWindow {
+        Backend backend;
+        QQmlEngine engine;
+        QScopedPointer<QObject> window;
+        QString error;
+
+        bool load() {
+            const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+            engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+            QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+            window.reset(component.create());
+            error = component.errorString();
+            return !window.isNull();
+        }
+
+        QVariant call(const char *function, const QVariant &argument = QVariant()) {
+            QVariant result;
+            if (argument.isValid()) {
+                QMetaObject::invokeMethod(window.data(), function,
+                                          Q_RETURN_ARG(QVariant, result),
+                                          Q_ARG(QVariant, argument));
+            } else {
+                QMetaObject::invokeMethod(window.data(), function,
+                                          Q_RETURN_ARG(QVariant, result));
+            }
+            // Closed tabs are destroyed on the next turn of the event loop.
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return result;
+        }
+
+        void open(const QUrl &url) { call("requestOpen", url); }
+        int count() const { return window->property("tabCount").toInt(); }
+        int currentIndex() const { return window->property("currentIndex").toInt(); }
+        QString title(int index) { return call("tabTitle", index).toString(); }
+        Backend *document(int index) {
+            return qobject_cast<Backend *>(call("documentAt", index).value<QObject *>());
+        }
+        QList<QObject *> editors() const {
+            return window->findChildren<QObject *>(QStringLiteral("sourceEditor"));
+        }
+        QObject *unsavedDialog() const {
+            return window->findChild<QObject *>(QStringLiteral("unsavedChangesDialog"));
+        }
+        // What the dialog's buttons do: close it, then announce the choice.
+        void answerUnsaved(const char *choice) {
+            QMetaObject::invokeMethod(unsavedDialog(), "close");
+            QMetaObject::invokeMethod(unsavedDialog(), choice);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    };
+
+    static QUrl writeFile(const QString &path, const QByteArray &contents) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+                || file.write(contents) != contents.size())
+            return {};
+        return QUrl::fromLocalFile(path);
+    }
+
+    static QString readFile(const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+    }
+
     QTemporaryDir m_settingsDirectory;
 };
 

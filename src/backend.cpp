@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QQmlEngine>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
 #include <QSettings>
@@ -142,6 +143,60 @@ Backend::~Backend() = default;
 
 void Backend::setParentWindow(QWindow *window) {
     m_parentWindow = window;
+    const auto siblings = findChildren<Backend *>(Qt::FindDirectChildrenOnly);
+    for (Backend *sibling : siblings)
+        sibling->setParentWindow(window);
+}
+
+Backend *Backend::createSibling() {
+    // Parented here, so the QML engine never garbage-collects a tab's document
+    // out from under it; closeDocument() is what ends a sibling.
+    auto *sibling = new Backend(this);
+    QQmlEngine::setObjectOwnership(sibling, QQmlEngine::CppOwnership);
+    sibling->setParentWindow(m_parentWindow);
+    sibling->setDarkMode(m_darkMode);
+    sibling->setTextScale(m_textScale);
+    sibling->setAutosaveInterval(autosaveInterval());
+
+    // main() only tells the first backend about the desktop's appearance.
+    connect(this, &Backend::darkModeChanged, sibling,
+            [this, sibling]() { sibling->setDarkMode(m_darkMode); });
+    connect(this, &Backend::textScaleChanged, sibling,
+            [this, sibling]() { sibling->setTextScale(m_textScale); });
+    return sibling;
+}
+
+void Backend::closeDocument() {
+    // A closed tab must stop touching the disk. Without this a discarded edit
+    // would still be autosaved over the file half a minute after the tab went.
+    m_autosaveTimer.stop();
+    m_recoveryTimer.stop();
+    m_wordCountTimer.stop();
+    const QStringList watched = m_fileWatcher.files();
+    if (!watched.isEmpty())
+        m_fileWatcher.removePaths(watched);
+    m_document = nullptr;
+    m_recoveryLock.reset();
+
+    // The first backend belongs to main() and keeps relaying the desktop's
+    // appearance to its siblings, so it stays, inert. A sibling goes with its tab.
+    if (qobject_cast<Backend *>(parent()))
+        deleteLater();
+}
+
+bool Backend::hasOrphanedRecovery() const {
+    // A snapshot nobody holds the lock for was left by a window that died.
+    const QString stateDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    for (int slot = 0; slot < 100; ++slot) {
+        const QString base = QDir(stateDirectory).filePath(
+            QStringLiteral("recovery-%1").arg(slot));
+        if (!QFileInfo::exists(base + QStringLiteral(".json")))
+            continue;
+        QLockFile lock(base + QStringLiteral(".lock"));
+        if (lock.tryLock())
+            return true;
+    }
+    return false;
 }
 
 QString Backend::fileName() const {
