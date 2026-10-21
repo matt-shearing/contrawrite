@@ -4,8 +4,9 @@ A personal fork of [Omawrite](https://github.com/omacom-io/omawrite). Same edito
 
 - Tabs, so one window holds several documents (`Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`)
 - The last session's tabs reopen on a plain launch
-- 30-second autosave of named files
-- Local checkpoints, revert from the footer clock or `Ctrl+Shift+H`
+- Omawrite's pause autosave of a named file, plus a local checkpoint of every save
+- An untitled document checkpointed every 30 seconds, and never written to a file on its own
+- Revert from the footer clock or `Ctrl+Shift+H`
 
 Stock Omawrite stays installed. Super+Shift+W launches Contrawrite.
 

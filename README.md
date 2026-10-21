@@ -2,13 +2,18 @@
 
 A personal fork of [Omawrite](https://github.com/omacom-io/omawrite): the same
 dead-simple Markdown writer, with tabs that come back the next time you launch it,
-30-second autosave and local checkpoints.
+autosave and local checkpoints.
 
 On this machine Super+Shift+W launches Contrawrite. Stock Omawrite stays
 installed as its own app.
 
 How the fork tracks upstream, where files live, and what the post-update hook
 does: **[CONTRWRITE.md](CONTRWRITE.md)**.
+
+## Command line
+
+`omawrite` opens an empty document and `omawrite FILE` opens a Markdown file.
+`omawrite --help` and `omawrite --version` answer in the terminal without opening a window.
 
 ## Shortcuts
 
@@ -25,8 +30,13 @@ does: **[CONTRWRITE.md](CONTRWRITE.md)**.
 - `Ctrl+F` searches the document. Use `Enter` or `Ctrl+G` for the next match and `Shift+Enter` for the previous match.
 - `Ctrl+H` opens find and replace.
 - `Ctrl+Shift+H` opens checkpoints.
-- `Ctrl+B`, `Ctrl+I`, and `Ctrl+K` insert bold, italic, and link Markdown.
-- `Ctrl+?` shows the keyboard shortcut reference.
+- `Ctrl+B`, `Ctrl+I`, and `Ctrl+Shift+X` toggle bold, italic, and strikethrough Markdown. `Ctrl+K` inserts a link.
+- `Ctrl+=` and `Ctrl+-` change the text size, `Ctrl+0` returns to the default.
+  `Ctrl+scroll` does the same.
+- `Ctrl+Shift+C` copies the rendered document as HTML, with plain text as a fallback.
+- `Ctrl+?`, `Ctrl+/`, or `F1` shows the keyboard shortcut reference.
+- In the unsaved-changes dialog, `Alt+C`, `Alt+D`, and `Alt+S` choose Cancel,
+  Discard, and Save.
 
 One window holds several documents, each in its own tab. The row of tabs appears
 once a second document is open, so a window with one file looks the same as
@@ -55,10 +65,14 @@ files would autosave over each other. A window opened for a particular file, fro
 the file manager or as `contrawrite notes.md`, shows that file alone, and
 `Ctrl+N` always gives a blank window. Neither changes the remembered tabs.
 
-Named files autosave every 30 seconds while they have unsaved edits. Each autosave
-and manual save keeps a local checkpoint; the clock icon in the footer (or
-`Ctrl+Shift+H`) reverts to any of them. Untitled windows are checkpointed the same
-way until the first Save As.
+Once a document has been saved to a file, edits are auto-saved to that file a
+moment after you stop typing, so `Ctrl+S` is rarely needed. Each of those saves,
+and each manual save, keeps a local checkpoint; the clock icon in the footer (or
+`Ctrl+Shift+H`) reverts to any of them. Auto-save pauses when the file changes
+elsewhere, or when saving would rewrite its encoding or line endings, until you
+reload, keep your version, or save. A recovered draft is never auto-saved over
+its file — save it to keep it. An untitled document is never written to a file
+on its own; Contrawrite checkpoints it every 30 seconds until the first Save As.
 
 Unsaved drafts are recovered after an abnormal exit, one tab for each draft.
 Contrawrite also watches every open file and warns before an external change can
@@ -66,15 +80,54 @@ replace local work. If several open files change together, as they do after a
 sync or a `git checkout`, it asks about them one at a time and shows each file's
 tab while it asks.
 
+The font button in the footer picks the writing font from any installed text font,
+and the choice is remembered. IBM Plex Mono is the default.
+
 Text follows the desktop text size — `omarchy display text size`, or GNOME's
 `text-scaling-factor` — and re-flows without a restart. The default of 12px leaves
-the editor at the size Omawrite is designed around; larger and smaller sizes scale from there.
+the editor at the size Omawrite is designed around; larger and smaller sizes scale
+from there. `Ctrl+=`, `Ctrl+-`, and `Ctrl+scroll` set your own size on top of that,
+from 50% to 300% in browser-sized steps. It is remembered for the next window you open.
 
 ## Requirements
 
-- Qt 6: `qt6-base`, `qt6-declarative`, `qt6-quickcontrols2`
+- Qt 6: `qt6-base` and `qt6-declarative` (which includes Qt Quick Controls)
 - `xdg-desktop-portal` and a portal backend
 
-The iA Writer Mono font is bundled under the SIL Open Font License 1.1; see
-`fonts/OFL.txt`. The font is copyright Information Architects Inc. and based on
-IBM Plex, copyright IBM Corp.
+The IBM Plex Mono font is bundled under the SIL Open Font License 1.1; see
+`fonts/OFL.txt`. The font is copyright IBM Corp.
+
+## Build and install
+
+For a local build, install the Qt requirements above, a C++17 compiler such as
+`gcc`, and `make`. The build scripts use `qmake6` (or `qmake`), and the tests use
+QtTest; both ship in `qt6-base`.
+
+```sh
+./bin/build
+./bin/test
+./build/omawrite
+```
+
+`bin/test` runs the Qt test suite with the offscreen platform, so it does not
+require an active graphical session. To open a file with the local build:
+
+```sh
+./build/omawrite path/to/document.md
+```
+
+On Arch Linux or Omarchy, install `base-devel` for the packaging tools, then
+build and install the package:
+
+```sh
+./bin/install
+```
+
+This runs the local build and `makepkg -fsi`, which installs the package through
+pacman and may ask for authentication. To build a package archive for inspection
+without installing it:
+
+```sh
+cd pkgbuild
+makepkg -f
+```

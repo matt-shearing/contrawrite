@@ -12,19 +12,35 @@
 #include <QFileInfo>
 
 #include "backend.h"
+#include "cli.h"
 #include "systemtheme.h"
 
+#define OMAWRITE_VERSION "0.7.2"
+
 int main(int argc, char *argv[]) {
+    // Answered before the application exists, so they need no display.
+    if (const std::optional<int> exitCode =
+            Cli::handleArguments(argc, argv, QStringLiteral(OMAWRITE_VERSION)))
+        return *exitCode;
+
+    // Omarchy asks Qt for GTK 3 dialogs, which run inside this process, and a
+    // long-standing GTK 3 file chooser assertion aborts the whole app, unsaved
+    // text and all. The desktop portal shows the same chooser from a process
+    // of its own.
+    if (qgetenv("QT_QPA_PLATFORMTHEME") == "gtk3")
+        qputenv("QT_QPA_PLATFORMTHEME", "xdgdesktopportal");
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("omawrite"));
     app.setApplicationDisplayName(QStringLiteral("Contrawrite"));
+    app.setApplicationVersion(QStringLiteral(OMAWRITE_VERSION));
     app.setDesktopFileName(QStringLiteral("contrawrite"));
     app.setWindowIcon(QIcon::fromTheme(QStringLiteral("contrawrite")));
 
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-Regular.ttf"));
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-Italic.ttf"));
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-Bold.ttf"));
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-BoldItalic.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Regular.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Italic.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Bold.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-BoldItalic.ttf"));
     app.setOrganizationName(QStringLiteral("Omacom"));
     app.setOrganizationDomain(QStringLiteral("omacom.io"));
 
@@ -36,9 +52,9 @@ int main(int argc, char *argv[]) {
     QObject::connect(&systemTheme, &SystemTheme::darkModeChanged, &backend,
                      &Backend::setDarkMode);
 
-    // Carry the desktop's text scale into the default font, so the chrome that
-    // inherits it (dialog titles, buttons) grows along with the writing area.
-    const QFont interfaceFont(QStringLiteral("iA Writer Mono S"));
+    // Carry the text scale into the default font, so the chrome that inherits
+    // it (dialog titles, buttons) grows along with the writing area.
+    const QFont interfaceFont(QStringLiteral("IBM Plex Mono"));
     const qreal basePointSize = interfaceFont.pointSizeF() > 0
         ? interfaceFont.pointSizeF()
         : app.font().pointSizeF();
@@ -47,13 +63,16 @@ int main(int argc, char *argv[]) {
         scaled.setPointSizeF(basePointSize * textScale);
         app.setFont(scaled);
     };
-    applyInterfaceFont(systemTheme.textScale());
 
-    backend.setTextScale(systemTheme.textScale());
+    // The desktop sets the baseline; the backend folds the user's own text
+    // size into it and reports the total.
+    backend.setDesktopTextScale(systemTheme.textScale());
+    applyInterfaceFont(backend.textScale());
     QObject::connect(&systemTheme, &SystemTheme::textScaleChanged, &backend,
-                     [&backend, applyInterfaceFont](qreal textScale) {
-        applyInterfaceFont(textScale);
-        backend.setTextScale(textScale);
+                     &Backend::setDesktopTextScale);
+    QObject::connect(&backend, &Backend::textScaleChanged, &app,
+                     [&backend, applyInterfaceFont]() {
+        applyInterfaceFont(backend.textScale());
     });
 
     QQmlApplicationEngine engine;
@@ -77,18 +96,22 @@ int main(int argc, char *argv[]) {
     // Launched on its own, Contrawrite brings back the tabs it had last time.
     // Asked for particular files, or for a new window, it opens exactly that
     // and leaves the remembered tabs to the window that owns them.
-    const QStringList args = app.arguments().mid(1);
-    if (args.isEmpty())
+    QStringList files;
+    for (const QString &arg : app.arguments().mid(1)) {
+        if (arg != QStringLiteral("--new-window"))
+            files.append(QFileInfo(arg).absoluteFilePath());
+    }
+    if (files.isEmpty()) {
         QMetaObject::invokeMethod(window, "restoreSession");
-
-    // Each file named on the command line gets a tab; the window decides
-    // whether the blank first tab can take it.
-    for (const QString &arg : args) {
-        if (arg == QStringLiteral("--new-window"))
-            continue;
-        const QString path = QFileInfo(arg).absoluteFilePath();
-        QMetaObject::invokeMethod(window, "requestOpen",
-                                  Q_ARG(QVariant, QUrl::fromLocalFile(path)));
+    } else if (files.size() == 1 && !QFileInfo::exists(files.at(0))) {
+        // `contrawrite new.md` starts a blank document the first save writes
+        // there, the same as Omawrite. An existing path takes a tab below.
+        backend.openOrStartFile(QUrl::fromLocalFile(files.at(0)));
+    } else {
+        for (const QString &path : files) {
+            QMetaObject::invokeMethod(window, "requestOpen",
+                                      Q_ARG(QVariant, QUrl::fromLocalFile(path)));
+        }
     }
 
     return app.exec();
