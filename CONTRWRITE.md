@@ -26,7 +26,7 @@ Omawrite's pitch is "no vaults, no plugins, just you and the words." Autosave of
 | Remembered tabs | `~/.local/share/Omacom/omawrite/contrawrite-session.json` |
 | Last sync state | `~/.local/state/contrawrite/` |
 
-The `.pro` target stays `omawrite` on purpose. Fewer conflicts when DHH touches the build file; `bin/install-user` copies `build/omawrite` to `~/bin/contrawrite`.
+The CMake target stays `omawrite` on purpose. Fewer conflicts when upstream touches the build file; `bin/install-user` copies `build/omawrite` to `~/bin/contrawrite`.
 
 ## How tabs stay mergeable
 
@@ -40,9 +40,9 @@ upstream does most of its work. Three choices keep future merges quiet:
   block, went through without a conflict.
 - The rest of the window still says `backend`, `editor` and `editorFlick`. Those
   names now mean the current tab's, so the lines that use them did not change.
-- The shortcuts help keeps upstream's line exactly as written and adds
-  Contrawrite's shortcuts after it. Every upstream pull request that adds a
-  shortcut edits that one line, and it used to conflict each time.
+- The shortcuts help keeps upstream's shortcut list exactly as written and
+  concatenates Contrawrite's shortcuts after it. A pull request that adds a
+  shortcut edits that list, and appending outside it keeps the merge quiet.
 
 Omawrite's own tests pass unchanged. They hand the window one `Backend`, and that
 one becomes the first tab's document; `src/FirstBackend.qml` is what passes it
